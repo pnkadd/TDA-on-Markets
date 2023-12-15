@@ -1,5 +1,3 @@
-!pip install yfinance gudhi matplotlib numpy pandas
-
 import yfinance as yf
 import numpy as np
 import pandas as pd
@@ -9,73 +7,56 @@ from gudhi import RipsComplex, SimplexTree
 from gudhi.hera import wasserstein_distance
 
 # -------------------------------
-# Step 1: Data Acquisition and Preparation
+# Data Acquisition and Preparation
 # -------------------------------
-
-# Download S&P 500 and NASDAQ data
 sp500 = yf.download('^GSPC', start='2005-01-01', end='2023-07-30')['Close']
 nasdaq = yf.download('^IXIC', start='2005-01-01', end='2023-07-30')['Close']
 djia = yf.download('^DJI', start='2005-01-01', end='2023-07-30')['Close']  
 russell2000 = yf.download('^RUT', start='2005-01-01', end='2023-07-30')['Close'] 
 
-# Compute log returns
 log_returns_sp500 = np.log(sp500 / sp500.shift(1)).dropna()
 log_returns_nasdaq = np.log(nasdaq / nasdaq.shift(1)).dropna()
 log_returns_djia = np.log(djia / djia.shift(1)).dropna()
 log_returns_russell2000 = np.log(russell2000 / russell2000.shift(1)).dropna()
 
-
 # -------------------------------
-# Step 2: Sliding Window Approach
+# Sliding Window Approach
 # -------------------------------
-
 window_size = 50
-points = []
-num_1_cycles_per_window = []
 persistence_diagrams = []
 p_persistence_diagrams = []
 wasserstein_distances = []
 landscapes = []
 window_dates = []
 
-# Function to convert a SimplexTree to a persistence diagram
+# Helper Functions
 def simplex_tree_to_diagram(simplex_tree):
-    persistence = simplex_tree.persistence()
-    diagram = np.array([[birth, death] for _, (birth, death) in persistence if death != float('inf')])
-    return diagram
+    return np.array([[birth, death] for _, (birth, death) in simplex_tree.persistence() if death != float('inf')])
 
-# Function to compute Wasserstein distance between two diagrams
 def compute_wasserstein_distance(diagram1, diagram2):
     return gd.hera.wasserstein_distance(diagram1, diagram2, order=2)
 
-
-# Function to create a landscape function for a single point
 def create_landscape_function(b, d):
     return lambda x: max(min(x - b, d - x, (d - b) / 2), 0)
 
-# Iterate over each sliding window
+def calculate_lp_norm(landscape, p):
+    return np.sum(np.abs(landscape)**p)**(1/p)
+
+def rate_of_change(values):
+    return np.diff(values)
+
+# Main Analysis Loop
 for i in range(len(log_returns_sp500) - window_size + 1):
-    # Create the point cloud for the window
-    window_sp500 = log_returns_sp500[i:i+window_size]
-    window_nasdaq = log_returns_nasdaq[i:i+window_size]
-    window_djia = log_returns_djia[i:i+window_size]
-    window_russell2000 = log_returns_russell2000[i:i+window_size]
-
-    point_cloud_2D = np.column_stack((window_sp500, window_nasdaq))
-    point_cloud_4D = np.column_stack((window_sp500, window_nasdaq, window_djia, window_russell2000))
-    
-
-    # Perform TDA using Rips Complex
-    rips = RipsComplex(points=point_cloud_4D, max_edge_length=10)
+    window = np.column_stack((log_returns_sp500[i:i+window_size], 
+                              log_returns_nasdaq[i:i+window_size], 
+                              log_returns_djia[i:i+window_size], 
+                              log_returns_russell2000[i:i+window_size]))
+    rips = RipsComplex(points=window, max_edge_length=10)
     simplex_tree = rips.create_simplex_tree(max_dimension=2)
     diagram = simplex_tree.persistence()
     persistence_diagrams.append(diagram)
     p_persistence_diagrams.append(simplex_tree_to_diagram(simplex_tree))
     
-    
-    # Count the number of 1-cycles
-    num_1_cycles = sum(1 for pt in diagram if pt[0] == 1)
-    num_1_cycles_per_window.append(num_1_cycles)
 
     # Extract 1-cycles for landscape functions
     one_cycles = [pt for pt in diagram if pt[0] == 1]
@@ -91,73 +72,86 @@ for i in range(len(log_returns_sp500) - window_size + 1):
         
     landscapes.append(landscape_values)
     window_dates.append(sp500.index[i + window_size - 1])
+    
 
-# Plot the first landscape
-if landscapes:
-    plt.plot(x_values, landscapes[0])
-    plt.title("Persistence Landscape for 1-Cycles (First Window)")
-    plt.xlabel("Time")
-    plt.ylabel("Landscape Value")
-    plt.show()
-
-# Plot the number of 1-cycles over time
-plt.plot(num_1_cycles_per_window)
-plt.xlabel('Window Index')
-plt.ylabel('Number of 1-Cycles')
-plt.title('Number of 1-Cycles over Time')
-plt.show()
-
-# -------------------------------
-# L^p Norm Calculation and Normalization
-# -------------------------------
-
-# Function to calculate L^p norm of a landscape
-def calculate_lp_norm(landscape, p):
-    return np.sum(np.abs(landscape)**p)**(1/p)
-
-# Calculate and normalize L^p norms
-lp_norms_p1 = [calculate_lp_norm(landscape, 1) for landscape in landscapes]
-lp_norms_p2 = [calculate_lp_norm(landscape, 2) for landscape in landscapes]
-
-max_norm_p1 = max(lp_norms_p1)
-max_norm_p2 = max(lp_norms_p2)
-
-normalized_lp_norms_p1 = [norm / max_norm_p1 for norm in lp_norms_p1]
-normalized_lp_norms_p2 = [norm / max_norm_p2 for norm in lp_norms_p2]
-
-# Convert the window dates to a more readable format (e.g., just the year)
-window_years = [date.year for date in window_dates]
-
-# Plotting normalized norms with dates on the x-axis
-plt.figure(figsize=(12, 6))
-
-# Normalized L1 Norms
-plt.subplot(1, 2, 1)
-plt.plot(window_years, normalized_lp_norms_p1)
-plt.title("Normalized L^1 Norms of Persistence Landscapes")
-plt.xlabel("Year")
-plt.ylabel("Normalized L^1 Norm")
-
-# Normalized L2 Norms
-plt.subplot(1, 2, 2)
-plt.plot(window_years, normalized_lp_norms_p2)
-plt.title("Normalized L^2 Norms of Persistence Landscapes")
-plt.xlabel("Year")
-plt.ylabel("Normalized L^2 Norm")
-
-plt.tight_layout()
-plt.show()
-
-
-# Compute Wasserstein distances between consecutive diagrams
+# Compute Wasserstein distances and L^p norms
 for i in range(len(persistence_diagrams) - 1):
     distance = compute_wasserstein_distance(p_persistence_diagrams[i], p_persistence_diagrams[i+1])
     wasserstein_distances.append(distance)
 
-# Plot Wasserstein distances over time
+lp_norms_p1 = [calculate_lp_norm(landscape, 1) for landscape in landscapes]
+lp_norms_p2 = [calculate_lp_norm(landscape, 2) for landscape in landscapes]
+
+# -------------------------------
+# Visualization
+# -------------------------------
+# First 2D Point Cloud
+plt.figure(figsize=(8, 6))
+plt.scatter(log_returns_sp500[:window_size], log_returns_nasdaq[:window_size], c='blue', edgecolor='k', alpha=0.7)
+plt.xlabel('S&P 500 Log Returns')
+plt.ylabel('NASDAQ Log Returns')
+plt.title('First 2D Point Cloud')
+plt.grid(True)
+plt.show()
+
+# First Persistence Diagram for 4D Point Cloud
+plt.figure(figsize=(8, 6))
+gd.plot_persistence_diagram(persistence_diagrams[0])
+plt.title('First Persistence Diagram for 4D Point Cloud')
+plt.xlabel('Birth')
+plt.ylabel('Death')
+plt.show()
+
+# Normalized L^p Norms Over Time
+window_years = [date.year for date in window_dates]
+normalized_lp_norms_p1 = [norm / max(lp_norms_p1) for norm in lp_norms_p1]
+normalized_lp_norms_p2 = [norm / max(lp_norms_p2) for norm in lp_norms_p2]
+
+# Plotting L^1 and L^2 Norms Over Time
+plt.figure(figsize=(12, 6))
+plt.plot(window_years, normalized_lp_norms_p1, label='L^1 Norms', color='purple', marker='o', linestyle='-', linewidth=2, markersize=5)
+plt.plot(window_years, normalized_lp_norms_p2, label='L^2 Norms', color='green', marker='x', linestyle='-', linewidth=2, markersize=5)
+plt.title("Normalized L^1 and L^2 Norms of Persistence Landscapes Over Time")
+plt.xlabel("Year")
+plt.ylabel("Normalized L^p Norm")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# Plotting Wasserstein distances over time
 plt.figure(figsize=(10, 6))
-plt.plot(window_years[1:], wasserstein_distances)  # Skip the first year as there's no previous diagram to compare
+plt.plot(window_years[1:], wasserstein_distances, color='blue', marker='o', linestyle='-', linewidth=2, markersize=5)
 plt.xlabel('Year')
 plt.ylabel('Wasserstein Distance')
 plt.title('Wasserstein Distances Over Time')
+plt.grid(True)
 plt.show()
+
+# Calculate rate of change for Wasserstein distances and L^2 norms
+rate_of_change_wasserstein = rate_of_change(wasserstein_distances)
+rate_of_change_lp1 = rate_of_change(lp_norms_p1)
+rate_of_change_lp2 = rate_of_change(lp_norms_p2)
+
+# Adjust years_for_rate_of_change to match the length of the rate of change arrays
+years_for_rate_of_change = window_years[2:]  # Start from the third year
+
+# Plotting Rate of Change of Wasserstein Distances
+plt.figure(figsize=(10, 6))
+plt.plot(window_years[2:], rate_of_change_wasserstein, color='purple', marker='o', linestyle='-', linewidth=2, markersize=5)
+plt.title("Rate of Change of Wasserstein Distances Over Time")
+plt.xlabel("Year")
+plt.ylabel("Rate of Change")
+plt.grid(True)
+plt.show()
+
+# Plotting Rate of Change of L^2 Norms
+plt.figure(figsize=(10, 6))
+plt.plot(window_years[1:], rate_of_change_lp2, label='Rate of change of L^2 Norms', color='blue', marker='o', linestyle='-', linewidth=2, markersize=5)
+plt.plot(window_years[1:], rate_of_change_lp1, label='Rate of change of L^1 Norms', color='red', marker='o', linestyle='-', linewidth=2, markersize=5)
+plt.title("Rate of Change of L^1 and L^2 Norms Over Time")
+plt.xlabel("Year")
+plt.ylabel("Rate of Change")
+plt.legend()
+plt.grid(True)
+plt.show()
+
