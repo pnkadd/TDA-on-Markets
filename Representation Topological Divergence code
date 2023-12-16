@@ -1,0 +1,131 @@
+# following the method described the paper by Baranikov et. al. we compute the Representation Topological Divergence (or R-Cross Barcode)
+# for succesive pairs of windows containing the daily returns of the four major US indices (code takes approximately 15 mins to run)
+
+import yfinance as yf
+import networkx as nx
+import numpy as np
+import gudhi as gd
+import matplotlib.pyplot as plt
+from gudhi import RipsComplex, SimplexTree
+from gudhi.hera import wasserstein_distance
+
+
+# -------------------------------
+# Data Acquisition and Preparation
+# -------------------------------
+sp500 = yf.download('^GSPC', start='2005-01-01', end='2023-07-30')['Close']
+nasdaq = yf.download('^IXIC', start='2005-01-01', end='2023-07-30')['Close']
+djia = yf.download('^DJI', start='2005-01-01', end='2023-07-30')['Close']  
+russell2000 = yf.download('^RUT', start='2005-01-01', end='2023-07-30')['Close'] 
+
+log_returns_sp500 = np.log(sp500 / sp500.shift(1)).dropna()
+log_returns_nasdaq = np.log(nasdaq / nasdaq.shift(1)).dropna()
+log_returns_djia = np.log(djia / djia.shift(1)).dropna()
+log_returns_russell2000 = np.log(russell2000 / russell2000.shift(1)).dropna()
+
+# -------------------------------
+# Sliding Window Approach
+# -------------------------------
+window_size = 50
+
+# Helper Functions
+def simplex_tree_to_diagram(simplex_tree):
+    return np.array([[birth, death] for _, (birth, death) in simplex_tree.persistence() if death != float('inf')])
+
+def compute_wasserstein_distance(diagram1, diagram2):
+    return gd.hera.wasserstein_distance(diagram1, diagram2, order=2)
+
+
+def create_graph_from_window(window):
+    graph = nx.Graph()
+    num_points = window.shape[0]
+    for i in range(num_points):
+        for j in range(i + 1, num_points):
+            distance = np.linalg.norm(window[i] - window[j])
+            graph.add_edge(i, j, weight=distance)
+    return graph
+
+def combine_graphs(G1, G2):
+    G = nx.Graph()
+
+    # Add original and corresponding vertices
+    for i in G1.nodes():
+        G.add_node(i)        # Original vertex
+        G.add_node(f"{i}'")  # Corresponding vertex
+
+    # Unique vertex O
+    G.add_node('O')
+
+    # Assigning weights
+    for i, j in G1.edges():
+        w1 = G1[i][j]['weight']
+        w2 = G2[i][j]['weight'] if (i, j) in G2.edges() or (j, i) in G2.edges() else float('inf')
+
+        # Add edges between original vertices and their corresponding vertices
+        G.add_edge(i, f"{i}'", weight=0)       # Weight = 0
+        G.add_edge(i, f"{j}'", weight=w1)      # Weight = w1
+        G.add_edge(f"{i}'", f"{j}'", weight=min(w1, w2)) # Minimum weight
+
+        # Add edges involving unique vertex O
+        G.add_edge('O', i, weight=0)               # Weight = 0
+        G.add_edge('O', f"{i}'", weight=float('inf'))  # Weight = + infinity
+
+    return G
+
+def graph_to_distance_matrix(G):
+    n = len(G.nodes())
+    distance_matrix = np.full((n, n), np.inf)
+    for i, j, data in G.edges(data=True):
+        distance = data['weight']
+        distance_matrix[i, j] = distance_matrix[j, i] = distance
+    return distance_matrix
+
+def compute_persistence_diagram(graph):
+    distance_matrix = nx.floyd_warshall_numpy(graph)
+    rips_complex = gd.RipsComplex(distance_matrix=distance_matrix, max_edge_length=np.inf)
+    simplex_tree = rips_complex.create_simplex_tree(max_dimension=2)
+    return simplex_tree.persistence()
+
+def compute_p_persistence_diagram(graph):
+    distance_matrix = nx.floyd_warshall_numpy(graph)
+    rips_complex = gd.RipsComplex(distance_matrix=distance_matrix, max_edge_length=np.inf)
+    simplex_tree = rips_complex.create_simplex_tree(max_dimension=2)
+    return simplex_tree_to_diagram(simplex_tree)
+
+
+# Analysis Loop
+graphs = []
+persistence_diagrams = []
+p_persistence_diagrams = []
+wasserstein_distances = []
+window_dates = []
+
+for i in range(len(log_returns_sp500) - window_size + 1):
+    window = np.column_stack((log_returns_sp500[i:i+window_size],
+                              log_returns_nasdaq[i:i+window_size],
+                              log_returns_djia[i:i+window_size],
+                              log_returns_russell2000[i:i+window_size]))
+    graph = create_graph_from_window(window)
+    graphs.append(graph)
+    window_dates.append(sp500.index[i + window_size - 1])
+
+# Compute combined graphs and persistence diagrams
+for i in range(len(graphs) - 1):
+    combined_graph = combine_graphs(graphs[i], graphs[i + 1])
+    pd = compute_persistence_diagram(combined_graph)
+    p_pd = compute_p_persistence_diagram(combined_graph)
+    persistence_diagrams.append(pd)
+    p_persistence_diagrams.append(p_pd)
+
+# Compute Wasserstein distances
+for i in range(len(persistence_diagrams) - 1):
+    distance = gd.hera.wasserstein_distance(p_persistence_diagrams[i], p_persistence_diagrams[i + 1], order=2)
+    wasserstein_distances.append(distance)
+
+# Plot Wasserstein distances over time
+years = [date.year for date in window_dates[1:-1]]  # Skip first and last year as they don't have complete data
+plt.plot(years, wasserstein_distances)
+plt.xlabel('Year')
+plt.ylabel('Wasserstein Distance')
+plt.title('Wasserstein Distances Over Time')
+plt.show()
