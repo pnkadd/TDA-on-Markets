@@ -1,4 +1,4 @@
-We propse two indicators based on TDA (Wasserstein distance and L^p norm of persistence landscape) which are correlated with the volatilty index of stocks. When they are high there is a high chance that the market will crash.
+We propse two indicators based on TDA (Wasserstein distance and L^p norm of persistence landscape) which are correlated with the volatilty index of stocks. When they are sufficiently high there is a high chance that the market will crash.
 
 The graphs of the indexes are in the main file titled TDA.ipnyb, as you see spikes correlate to market crashes. In the same file but lower cells there is also a comparison with stocks in the EU which shows as a sample how to paste different data in the code. 
 
